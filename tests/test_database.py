@@ -52,6 +52,12 @@ class TestAdminDatabase(unittest.TestCase):
         # Other alert types remain unsent
         self.assertFalse(self.db.has_alert_been_sent(emp_id, date_str, "lunch_final"))
 
+        # Punch confirmation key deduplication
+        punch_key = "punch_0_08:00"
+        self.assertFalse(self.db.has_alert_been_sent(emp_id, date_str, punch_key))
+        self.db.record_dispatched_alert(emp_id, date_str, punch_key)
+        self.assertTrue(self.db.has_alert_been_sent(emp_id, date_str, punch_key))
+
     def test_backup_export_and_import(self):
         emp = AdminEmployee(_id="emp1", full_name="Ana Paula", email="ana@empresa.com")
         self.db.upsert_employees_from_api([emp])

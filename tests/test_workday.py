@@ -43,10 +43,21 @@ class TestWorkdayEngine(unittest.TestCase):
         self.assertTrue(status.lunch_advance_alert)
         self.assertFalse(status.lunch_final_alert)
 
-        # Check at 12:59:10 (less than 1m remaining)
+        # Check at 12:59:10 (less than 1m remaining of 1h)
         now_final = self.tz.localize(datetime(2026, 9, 21, 12, 59, 10))
         status_final = self.engine.calculate("emp1", ["08:00", "12:00"], current_dt=now_final, lunch_advance_minutes=10)
         self.assertTrue(status_final.lunch_final_alert)
+
+        # Extended lunch (gym / errands): Check at 13:51 (1h51m in lunch -> 9 min before 2h limit)
+        now_2h_adv = self.tz.localize(datetime(2026, 9, 21, 13, 51))
+        status_2h_adv = self.engine.calculate("emp1", ["08:00", "12:00"], current_dt=now_2h_adv, lunch_advance_minutes=10)
+        self.assertTrue(status_2h_adv.lunch_2h_advance_alert)
+        self.assertFalse(status_2h_adv.lunch_2h_final_alert)
+
+        # Check at 13:59:15 (less than 1m before 2h limit)
+        now_2h_final = self.tz.localize(datetime(2026, 9, 21, 13, 59, 15))
+        status_2h_final = self.engine.calculate("emp1", ["08:00", "12:00"], current_dt=now_2h_final, lunch_advance_minutes=10)
+        self.assertTrue(status_2h_final.lunch_2h_final_alert)
 
     def test_second_half_prediction_and_completion(self):
         # 08:00, 12:00 (4h worked), 13:00 (afternoon start). Needs 4 more hours -> ends at 17:00
@@ -62,6 +73,46 @@ class TestWorkdayEngine(unittest.TestCase):
         self.assertEqual(status_comp.stage, WorkdayStage.COMPLETED)
         self.assertEqual(status_comp.worked_hours_str, "08h00m")
         self.assertTrue(status_comp.summary_alert)
+
+    def test_flexible_schedule_multi_break_and_arbitrary_punches(self):
+        # Flexible schedule:
+        # Punch 1: 08:00 (in)
+        # Punch 2: 11:00 (out to pause 1 - worked 3h)
+        # Punch 3: 12:00 (in from pause 1 - pause was 1h)
+        # Punch 4: 14:00 (out to pause 2 - worked 2h, total worked = 5h)
+        now_break2 = self.tz.localize(datetime(2026, 9, 21, 14, 51))
+        status_b2 = self.engine.calculate(
+            "emp1",
+            ["08:00", "11:00", "12:00", "14:00"],
+            current_dt=now_break2,
+            lunch_advance_minutes=10,
+        )
+        self.assertEqual(status_b2.stage, WorkdayStage.LUNCH_BREAK)
+        self.assertEqual(status_b2.worked_hours_str, "05h00m")
+        self.assertEqual(status_b2.remaining_work_str, "03h00m")
+        self.assertTrue(status_b2.lunch_advance_alert) # 51 min into 1h pause -> alert
+
+        # Punch 5: 15:00 (return from pause 2)
+        now_work3 = self.tz.localize(datetime(2026, 9, 21, 15, 30))
+        status_p5 = self.engine.calculate(
+            "emp1",
+            ["08:00", "11:00", "12:00", "14:00", "15:00"],
+            current_dt=now_work3,
+        )
+        self.assertEqual(status_p5.stage, WorkdayStage.SECOND_HALF)
+        # Needs 3 more hours from 15:00 -> predicted end is 18:00
+        self.assertEqual(status_p5.estimated_end_time, "18:00")
+
+        # Punch 6: 18:00 (final exit, completing 8h)
+        now_end = self.tz.localize(datetime(2026, 9, 21, 18, 0, 5))
+        status_p6 = self.engine.calculate(
+            "emp1",
+            ["08:00", "11:00", "12:00", "14:00", "15:00", "18:00"],
+            current_dt=now_end,
+        )
+        self.assertEqual(status_p6.stage, WorkdayStage.COMPLETED)
+        self.assertEqual(status_p6.worked_hours_str, "08h00m")
+        self.assertTrue(status_p6.summary_alert)
 
 
 if __name__ == "__main__":

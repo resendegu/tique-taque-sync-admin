@@ -28,11 +28,14 @@ class EmployeeWorkdayStatus:
         times: List[str],
         lunch_advance_alert: bool = False,
         lunch_final_alert: bool = False,
+        lunch_2h_advance_alert: bool = False,
+        lunch_2h_final_alert: bool = False,
         end_work_advance_alert: bool = False,
         end_work_final_alert: bool = False,
         clt_advance_alert: bool = False,
         clt_final_alert: bool = False,
         summary_alert: bool = False,
+        remaining_lunch_2h_seconds: Optional[int] = None,
     ):
         self.employee_id = employee_id
         self.stage = stage
@@ -40,11 +43,14 @@ class EmployeeWorkdayStatus:
         self.continuous_worked_seconds = continuous_worked_seconds
         self.lunch_duration_seconds = lunch_duration_seconds
         self.remaining_lunch_seconds = remaining_lunch_seconds
+        self.remaining_lunch_2h_seconds = remaining_lunch_2h_seconds
         self.remaining_work_seconds = remaining_work_seconds
         self.estimated_end_time = estimated_end_time
         self.times = times
         self.lunch_advance_alert = lunch_advance_alert
         self.lunch_final_alert = lunch_final_alert
+        self.lunch_2h_advance_alert = lunch_2h_advance_alert
+        self.lunch_2h_final_alert = lunch_2h_final_alert
         self.end_work_advance_alert = end_work_advance_alert
         self.end_work_final_alert = end_work_final_alert
         self.clt_advance_alert = clt_advance_alert
@@ -68,6 +74,14 @@ class EmployeeWorkdayStatus:
         m = self.lunch_duration_seconds // 60
         return f"{m} min"
 
+    @property
+    def remaining_work_str(self) -> str:
+        if self.remaining_work_seconds is None or self.remaining_work_seconds <= 0:
+            return "00h00m"
+        h = self.remaining_work_seconds // 3600
+        m = (self.remaining_work_seconds % 3600) // 60
+        return f"{h:02d}h{m:02d}m"
+
     def to_dict(self) -> dict:
         return {
             "employee_id": self.employee_id,
@@ -79,7 +93,9 @@ class EmployeeWorkdayStatus:
             "lunch_duration_seconds": self.lunch_duration_seconds,
             "lunch_duration_str": self.lunch_duration_str,
             "remaining_lunch_seconds": self.remaining_lunch_seconds,
+            "remaining_lunch_2h_seconds": self.remaining_lunch_2h_seconds,
             "remaining_work_seconds": self.remaining_work_seconds,
+            "remaining_work_str": self.remaining_work_str,
             "estimated_end_time": self.estimated_end_time,
             "times": self.times,
         }
@@ -147,88 +163,50 @@ class WorkdayEngine:
                 times=[],
             )
 
-        # Case 1: First Half (1 punch)
-        if len(dts) == 1:
-            start = dts[0]
-            worked = max(0, int((now - start).total_seconds())) if now > start else 0
-            continuous = worked
-            remaining_work = max(0, self.target_seconds - worked)
+        # Sum of completed work blocks: (0, 1), (2, 3), (4, 5)...
+        completed_worked = sum(
+            max(0, int((dts[i + 1] - dts[i]).total_seconds()))
+            for i in range(0, len(dts) - 1, 2)
+        )
 
-            clt_advance = (self.continuous_limit_seconds - continuous) <= clt_advance_sec and (self.continuous_limit_seconds - continuous) > self.clt_final_sec
-            clt_final = (self.continuous_limit_seconds - continuous) <= self.clt_final_sec
+        # Duration of last completed break (e.g. between 1 and 2, or 3 and 4)
+        last_completed_break = 0
+        if len(dts) >= 3:
+            if len(dts) % 2 == 1:
+                last_completed_break = max(0, int((dts[-1] - dts[-2]).total_seconds()))
+            else:
+                last_completed_break = max(0, int((dts[-2] - dts[-3]).total_seconds()))
 
-            return EmployeeWorkdayStatus(
-                employee_id=employee_id,
-                stage=WorkdayStage.FIRST_HALF,
-                worked_seconds=worked,
-                continuous_worked_seconds=continuous,
-                lunch_duration_seconds=0,
-                remaining_lunch_seconds=None,
-                remaining_work_seconds=remaining_work,
-                estimated_end_time=None,
-                times=clean_times,
-                clt_advance_alert=clt_advance,
-                clt_final_alert=clt_final,
-            )
+        is_working = (len(dts) % 2 == 1)
 
-        # Case 2: Lunch Break (2 punches)
-        if len(dts) == 2:
-            morning_start = dts[0]
-            lunch_start = dts[1]
-            worked = max(0, int((lunch_start - morning_start).total_seconds()))
-            lunch_duration = max(0, int((now - lunch_start).total_seconds())) if now > lunch_start else 0
-            remaining_lunch = max(0, self.lunch_target_seconds - lunch_duration)
-            remaining_work = max(0, self.target_seconds - worked)
-
-            # Alerts for lunch end
-            lunch_advance = remaining_lunch <= lunch_advance_sec and remaining_lunch > self.lunch_final_sec
-            lunch_final = remaining_lunch <= self.lunch_final_sec and lunch_duration < (self.lunch_target_seconds + 300)
-
-            return EmployeeWorkdayStatus(
-                employee_id=employee_id,
-                stage=WorkdayStage.LUNCH_BREAK,
-                worked_seconds=worked,
-                continuous_worked_seconds=0,
-                lunch_duration_seconds=lunch_duration,
-                remaining_lunch_seconds=remaining_lunch,
-                remaining_work_seconds=remaining_work,
-                estimated_end_time=None,
-                times=clean_times,
-                lunch_advance_alert=lunch_advance,
-                lunch_final_alert=lunch_final,
-            )
-
-        # Case 3: Second Half (3 punches)
-        if len(dts) == 3:
-            morning_start = dts[0]
-            lunch_start = dts[1]
-            afternoon_start = dts[2]
-
-            morning_worked = max(0, int((lunch_start - morning_start).total_seconds()))
-            lunch_duration = max(0, int((afternoon_start - lunch_start).total_seconds()))
-            afternoon_worked = max(0, int((now - afternoon_start).total_seconds())) if now > afternoon_start else 0
-
-            total_worked = morning_worked + afternoon_worked
-            continuous = afternoon_worked
+        if is_working:
+            # Active work session (1st punch, 3rd punch, 5th punch...)
+            active_start = dts[-1]
+            active_worked = max(0, int((now - active_start).total_seconds())) if now > active_start else 0
+            total_worked = completed_worked + active_worked
+            continuous = active_worked
             remaining_work = max(0, self.target_seconds - total_worked)
 
-            # Calculate exact predicted exit time
-            est_end_dt = afternoon_start + timedelta(seconds=max(0, self.target_seconds - morning_worked))
+            # Predicted finish time to complete target_hours (8h)
+            est_end_dt = active_start + timedelta(seconds=max(0, self.target_seconds - completed_worked))
             est_end_str = est_end_dt.strftime("%H:%M")
 
-            end_work_advance = remaining_work <= end_work_advance_sec and remaining_work > self.end_work_final_sec
-            end_work_final = remaining_work <= self.end_work_final_sec and remaining_work > 0
+            end_work_advance = (remaining_work <= end_work_advance_sec and remaining_work > self.end_work_final_sec)
+            end_work_final = (remaining_work <= self.end_work_final_sec and remaining_work > 0)
 
             clt_advance = (self.continuous_limit_seconds - continuous) <= clt_advance_sec and (self.continuous_limit_seconds - continuous) > self.clt_final_sec
             clt_final = (self.continuous_limit_seconds - continuous) <= self.clt_final_sec
 
+            stage = WorkdayStage.FIRST_HALF if len(dts) == 1 else WorkdayStage.SECOND_HALF
+
             return EmployeeWorkdayStatus(
                 employee_id=employee_id,
-                stage=WorkdayStage.SECOND_HALF,
+                stage=stage,
                 worked_seconds=total_worked,
                 continuous_worked_seconds=continuous,
-                lunch_duration_seconds=lunch_duration,
+                lunch_duration_seconds=last_completed_break,
                 remaining_lunch_seconds=0,
+                remaining_lunch_2h_seconds=0,
                 remaining_work_seconds=remaining_work,
                 estimated_end_time=est_end_str,
                 times=clean_times,
@@ -238,26 +216,62 @@ class WorkdayEngine:
                 clt_final_alert=clt_final,
             )
 
-        # Case 4: Completed (4 or more punches)
-        total_worked = 0
-        continuous = 0
-        for i in range(0, len(dts) - 1, 2):
-            seg = max(0, int((dts[i + 1] - dts[i]).total_seconds()))
-            total_worked += seg
+        else:
+            # Clocked out (2, 4, 6... punches): either in break/pause or completed workday
+            total_worked = completed_worked
+            remaining_work = max(0, self.target_seconds - total_worked)
 
-        lunch_duration = 0
-        if len(dts) >= 4:
-            lunch_duration = max(0, int((dts[2] - dts[1]).total_seconds()))
+            # If 4+ punches AND target (8h) reached -> COMPLETED
+            if len(dts) >= 4 and total_worked >= self.target_seconds:
+                return EmployeeWorkdayStatus(
+                    employee_id=employee_id,
+                    stage=WorkdayStage.COMPLETED,
+                    worked_seconds=total_worked,
+                    continuous_worked_seconds=0,
+                    lunch_duration_seconds=last_completed_break,
+                    remaining_lunch_seconds=0,
+                    remaining_lunch_2h_seconds=0,
+                    remaining_work_seconds=0,
+                    estimated_end_time=dts[-1].strftime("%H:%M"),
+                    times=clean_times,
+                    summary_alert=True,
+                )
 
-        return EmployeeWorkdayStatus(
-            employee_id=employee_id,
-            stage=WorkdayStage.COMPLETED,
-            worked_seconds=total_worked,
-            continuous_worked_seconds=0,
-            lunch_duration_seconds=lunch_duration,
-            remaining_lunch_seconds=0,
-            remaining_work_seconds=0,
-            estimated_end_time=dts[-1].strftime("%H:%M"),
-            times=clean_times,
-            summary_alert=True,
-        )
+            # In active break / pause (break 1, break 2, etc.)
+            break_start = dts[-1]
+            break_duration = max(0, int((now - break_start).total_seconds())) if now > break_start else 0
+            remaining_lunch = max(0, self.lunch_target_seconds - break_duration)
+
+            # 1h standard break alerts
+            lunch_advance = remaining_lunch <= lunch_advance_sec and remaining_lunch > self.lunch_final_sec
+            lunch_final = remaining_lunch <= self.lunch_final_sec and break_duration < (self.lunch_target_seconds + 300)
+
+            # Extended break alerts approaching 2h limit (CLT Art. 71 / gym / errands)
+            max_lunch_seconds = 7200  # 2 hours
+            remaining_lunch_2h = max(0, max_lunch_seconds - break_duration)
+            lunch_2h_advance = (
+                remaining_lunch_2h <= lunch_advance_sec
+                and remaining_lunch_2h > self.lunch_final_sec
+                and break_duration > self.lunch_target_seconds
+            )
+            lunch_2h_final = (
+                remaining_lunch_2h <= self.lunch_final_sec
+                and break_duration > self.lunch_target_seconds
+            )
+
+            return EmployeeWorkdayStatus(
+                employee_id=employee_id,
+                stage=WorkdayStage.LUNCH_BREAK,
+                worked_seconds=total_worked,
+                continuous_worked_seconds=0,
+                lunch_duration_seconds=break_duration,
+                remaining_lunch_seconds=remaining_lunch,
+                remaining_lunch_2h_seconds=remaining_lunch_2h,
+                remaining_work_seconds=remaining_work,
+                estimated_end_time=None,
+                times=clean_times,
+                lunch_advance_alert=lunch_advance,
+                lunch_final_alert=lunch_final,
+                lunch_2h_advance_alert=lunch_2h_advance,
+                lunch_2h_final_alert=lunch_2h_final,
+            )
