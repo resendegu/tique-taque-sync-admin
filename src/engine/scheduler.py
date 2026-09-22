@@ -230,7 +230,7 @@ class AdminSyncScheduler:
                         w_m = (worked_up_to_punch % 3600) // 60
                         worked_str = f"{w_h:02d}h{w_m:02d}m"
 
-                        target_sec = int(self.workday_engine.target_hours * 3600)
+                        target_sec = int(self.engine.target_hours * 3600)
                         break_est_return = (p_dt + timedelta(hours=1)).strftime("%H:%M")
 
                         if worked_up_to_punch >= target_sec:
