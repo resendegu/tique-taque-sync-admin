@@ -30,17 +30,29 @@ class TiqueTaqueAdminClient:
         )
 
     async def get_employees(self) -> list[AdminEmployee]:
-        """Fetch all active company employees."""
+        """Fetch all active company employees across all pages."""
         logger.info("Fetching employees from TiqueTaque Public Admin API...")
-        resp = await self._client.get("/employees")
-        if resp.status_code != 200:
-            logger.error("Failed to fetch employees: HTTP %s - %s", resp.status_code, resp.text)
-            resp.raise_for_status()
+        employees: list[AdminEmployee] = []
+        page = 1
+        while True:
+            resp = await self._client.get("/employees", params={"page": page, "max_results": 50})
+            if resp.status_code != 200:
+                logger.error("Failed to fetch employees page %d: HTTP %s - %s", page, resp.status_code, resp.text)
+                resp.raise_for_status()
 
-        data = resp.json()
-        raw_items = data.get("_items", [])
-        employees = [AdminEmployee.model_validate(item) for item in raw_items]
-        logger.info("Retrieved %d employees successfully.", len(employees))
+            data = resp.json()
+            raw_items = data.get("_items", [])
+            for item in raw_items:
+                employees.append(AdminEmployee.model_validate(item))
+
+            meta = data.get("_meta", {})
+            total = meta.get("total", len(raw_items))
+            max_results = meta.get("max_results", 50)
+            if page * max_results >= total or not raw_items:
+                break
+            page += 1
+
+        logger.info("Retrieved %d employees successfully across %d page(s).", len(employees), page)
         return employees
 
     async def get_employee_times(self, employee_id: str, date_str: str) -> list[str]:

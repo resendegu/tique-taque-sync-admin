@@ -41,8 +41,6 @@ class AdminSyncScheduler:
 
         # In-memory cache of latest punches per employee: {emp_id: ["08:00", "12:00"]}
         self._cached_punches: Dict[str, List[str]] = {}
-        # In-memory simulation override for punches testing: {emp_id: ["14:00", "18:00", "19:15"]}
-        self._punches_override: Dict[str, List[str]] = {}
         # In-memory cache of latest workday status: {emp_id: EmployeeWorkdayStatus}
         self._cached_status: Dict[str, EmployeeWorkdayStatus] = {}
 
@@ -87,11 +85,8 @@ class AdminSyncScheduler:
             default_lead = int(self.db.get_company_setting("default_lead_time", "10"))
             for emp in stored_employees:
                 emp_id = emp["id"]
-                # Even if notifications are disabled, we track punches for dashboard visibility
-                if emp_id in self._punches_override:
-                    punches = self._punches_override[emp_id]
-                else:
-                    punches = await self.client.get_employee_times(emp_id, today_str)
+                # Fetch official punches from TiqueTaque Public Admin API
+                punches = await self.client.get_employee_times(emp_id, today_str)
                 self._cached_punches[emp_id] = punches
 
                 lead = emp.get("lunch_warning_advance_minutes") or default_lead
@@ -105,6 +100,9 @@ class AdminSyncScheduler:
                 self._cached_status[emp_id] = status
 
             logger.info("Company sync complete for %d employees.", len(stored_employees))
+
+            # Evaluate alerts immediately following fresh API data sync
+            await self._evaluate_and_dispatch_alerts()
         except Exception as e:
             logger.exception("Error during company sync: %s", e)
 

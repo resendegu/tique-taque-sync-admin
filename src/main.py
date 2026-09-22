@@ -229,65 +229,6 @@ async def test_slack_for_employee(employee_id: str):
     return {"success": success}
 
 
-class SimulatePunchesPayload(BaseModel):
-    remaining_minutes: int = 8
-    punches: list[str] | None = None
-
-
-@admin_router.post("/employees/{employee_id}/simulate-workday")
-async def simulate_workday_for_employee(employee_id: str, payload: SimulatePunchesPayload = SimulatePunchesPayload()):
-    """Simulate/override employee punches for today to trigger alert testing."""
-    db: AdminDatabase = app_context["db"]
-    scheduler: AdminSyncScheduler = app_context["scheduler"]
-    emp = db.get_employee(employee_id)
-    if not emp:
-        raise HTTPException(status_code=404, detail="Colaborador não encontrado")
-
-    now = datetime.now(scheduler.tz)
-    today_date_str = now.strftime("%d/%m/%Y")
-
-    if payload.punches:
-        simulated_punches = payload.punches
-    else:
-        # Generate 3 punches so remaining_work is exactly remaining_minutes
-        # Morning: 14:00 - 18:00 (4h worked)
-        # Afternoon target: 4h
-        # End time: now + remaining_minutes
-        # Afternoon start = (now + remaining_minutes) - 4 hours
-        rem_min = payload.remaining_minutes
-        afternoon_start_dt = now + timedelta(minutes=rem_min) - timedelta(hours=4)
-        simulated_punches = ["14:00", "18:00", afternoon_start_dt.strftime("%H:%M")]
-
-    # Clear previously dispatched alerts for today so it fires fresh
-    db.clear_dispatched_alert(employee_id, today_date_str, "end_work_advance")
-
-    # Store in override and cache
-    scheduler._punches_override[employee_id] = simulated_punches
-    scheduler._cached_punches[employee_id] = simulated_punches
-
-    # Re-evaluate alerts immediately to dispatch Slack DM
-    await scheduler._evaluate_and_dispatch_alerts()
-
-    status = scheduler._cached_status.get(employee_id)
-    return {
-        "success": True,
-        "employee_id": employee_id,
-        "simulated_punches": simulated_punches,
-        "estimated_end_time": status.estimated_end_time if status else None,
-        "remaining_work_seconds": status.remaining_work_seconds if status else None,
-        "end_work_advance_alert": status.end_work_advance_alert if status else None,
-    }
-
-
-@admin_router.post("/employees/{employee_id}/reset-punches")
-async def reset_punches_for_employee(employee_id: str):
-    """Reset simulated punches back to real TiqueTaque API data."""
-    scheduler: AdminSyncScheduler = app_context["scheduler"]
-    scheduler._punches_override.pop(employee_id, None)
-    await scheduler.sync_company()
-    return {"success": True, "message": "Punches reset to real TiqueTaque data"}
-
-
 @admin_router.post("/sync")
 async def trigger_company_sync():
     """Trigger immediate company-wide sync with TiqueTaque Public Admin API."""

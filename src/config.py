@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     slack_allowed_team_id: str | None = Field(default=None, description="Allowed Slack Team/Workspace ID (e.g. T01V8LQHBE1)")
 
     # Polling & Timers
-    poll_interval_seconds: int = Field(default=180, description="Interval in seconds to poll TiqueTaque Admin API")
+    poll_interval_seconds: int = Field(default=45, description="Interval in seconds to poll TiqueTaque Admin API")
     alert_ticker_interval_seconds: int = Field(default=15, description="Interval in seconds for memory alert ticker")
     timezone: str = Field(default="America/Sao_Paulo")
 

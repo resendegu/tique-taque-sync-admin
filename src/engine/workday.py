@@ -154,8 +154,8 @@ class WorkdayEngine:
             continuous = worked
             remaining_work = max(0, self.target_seconds - worked)
 
-            clt_advance = (self.continuous_limit_seconds - continuous) <= clt_advance_sec and continuous < self.continuous_limit_seconds
-            clt_final = (self.continuous_limit_seconds - continuous) <= self.clt_final_sec and continuous < self.continuous_limit_seconds
+            clt_advance = (self.continuous_limit_seconds - continuous) <= clt_advance_sec and (self.continuous_limit_seconds - continuous) > self.clt_final_sec
+            clt_final = (self.continuous_limit_seconds - continuous) <= self.clt_final_sec
 
             return EmployeeWorkdayStatus(
                 employee_id=employee_id,
@@ -219,8 +219,8 @@ class WorkdayEngine:
             end_work_advance = remaining_work <= end_work_advance_sec and remaining_work > self.end_work_final_sec
             end_work_final = remaining_work <= self.end_work_final_sec and remaining_work > 0
 
-            clt_advance = (self.continuous_limit_seconds - continuous) <= clt_advance_sec and continuous < self.continuous_limit_seconds
-            clt_final = (self.continuous_limit_seconds - continuous) <= self.clt_final_sec and continuous < self.continuous_limit_seconds
+            clt_advance = (self.continuous_limit_seconds - continuous) <= clt_advance_sec and (self.continuous_limit_seconds - continuous) > self.clt_final_sec
+            clt_final = (self.continuous_limit_seconds - continuous) <= self.clt_final_sec
 
             return EmployeeWorkdayStatus(
                 employee_id=employee_id,

@@ -127,14 +127,9 @@ function renderEmployeesTable(list) {
                 </select>
             </td>
             <td>
-                <div style="display: flex; gap: 6px;">
-                    <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem;" onclick="testEmployeeSlack('${emp.id}')" title="Enviar DM de verificação">
-                        💬 Teste
-                    </button>
-                    <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; background: rgba(99,102,241,0.2); border-color: rgba(99,102,241,0.4);" onclick="simulateWorkday('${emp.id}')" title="Simula batidas faltando 8 min para disparar alerta de fim de expediente">
-                        ⏰ Alerta 10m
-                    </button>
-                </div>
+                <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem;" onclick="testEmployeeSlack('${emp.id}')" title="Enviar DM de verificação">
+                    💬 Teste
+                </button>
             </td>
         `;
         tbody.appendChild(tr);
@@ -193,39 +188,6 @@ async function testEmployeeSlack(employeeId) {
         }
     } catch (e) {
         showToast("Erro ao disparar teste", true);
-    }
-}
-
-async function simulateWorkday(employeeId) {
-    try {
-        const resp = await fetch(`/api/admin/employees/${employeeId}/simulate-workday`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ remaining_minutes: 8 })
-        });
-        const res = await resp.json();
-        if (resp.ok && res.success) {
-            showToast(`Simulação ativada! Faltam 8 min para a saída (${res.estimated_end_time}). Alerta disparado no Slack!`);
-            await fetchEmployees();
-        } else {
-            showToast("Falha ao simular jornada: " + (res.detail || "Erro"), true);
-        }
-    } catch (e) {
-        showToast("Erro ao disparar simulação", true);
-    }
-}
-
-async function resetPunches(employeeId) {
-    try {
-        const resp = await fetch(`/api/admin/employees/${employeeId}/reset-punches`, { method: "POST" });
-        if (resp.ok) {
-            showToast("Batidas restauradas para a API oficial do TiqueTaque!");
-            await fetchEmployees();
-        } else {
-            showToast("Erro ao restaurar batidas", true);
-        }
-    } catch (e) {
-        showToast("Falha ao restaurar batidas", true);
     }
 }
 
