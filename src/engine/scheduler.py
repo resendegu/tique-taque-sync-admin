@@ -206,13 +206,13 @@ class AdminSyncScheduler:
                         p_stage = "Saída para Intervalo"
                         p_level = "info"
                     elif idx == 2:
-                        est_end = status.estimated_end_time or "Horário padrão"
+                        est_phrase = f"Horário previsto para encerramento do expediente: *{status.estimated_end_time}*. " if status.estimated_end_time else ""
                         p_title = f"⏱️ Ponto Registrado: Retorno do Intervalo às {p_time}"
                         p_msg = (
                             f"*{emp['full_name']}*, seu retorno do intervalo foi confirmado às *{p_time}* "
-                            f"(intervalo de *{status.lunch_duration_str}*). Horário previsto para encerramento do expediente: *{est_end}*. "
+                            f"(intervalo de *{status.lunch_duration_str}*). {est_phrase}"
                             "Bom retorno ao trabalho! 💼"
-                        )
+                        ).replace("  ", " ")
                         p_stage = "Retorno do Intervalo"
                         p_level = "info"
                     elif idx % 2 == 1:
@@ -272,15 +272,32 @@ class AdminSyncScheduler:
                         except Exception:
                             pause_str = "—"
 
-                        est_end = status.estimated_end_time or "Horário padrão"
+                        # Calcula se a meta de 8h já foi cumprida antes deste retorno
+                        worked_up_to_punch = 0
+                        for i in range(0, idx, 2):
+                            try:
+                                t_in = base_date.replace(hour=int(punches[i].split(":")[0]), minute=int(punches[i].split(":")[1]))
+                                t_out = base_date.replace(hour=int(punches[i+1].split(":")[0]), minute=int(punches[i+1].split(":")[1]))
+                                worked_up_to_punch += max(0, int((t_out - t_in).total_seconds()))
+                            except Exception:
+                                pass
+
+                        target_sec = int(self.engine.target_hours * 3600)
+                        if worked_up_to_punch >= target_sec or not status.estimated_end_time:
+                            # 8h já cumpridas: sem horário previsto de saída
+                            est_phrase = ""
+                            stage_suffix = " (Adicional / Sobre-aviso)"
+                        else:
+                            est_phrase = f"Horário previsto para encerramento da jornada: *{status.estimated_end_time}*. "
+                            stage_suffix = ""
+
                         p_title = f"⏱️ Ponto Registrado: Retorno às {p_time}"
                         p_msg = (
                             f"*{emp['full_name']}*, seu retorno foi confirmado às *{p_time}* "
-                            f"(intervalo de *{pause_str}*). "
-                            f"Horário previsto para encerramento da jornada: *{est_end}*. "
+                            f"(intervalo de *{pause_str}*). {est_phrase}"
                             "Bom retorno ao trabalho! 💼"
-                        )
-                        p_stage = f"Retorno #{idx // 2 + 1}"
+                        ).replace("  ", " ")
+                        p_stage = f"Retorno #{idx // 2 + 1}{stage_suffix}"
                         p_level = "info"
 
                     await self.bot.send_dm_to_employee(

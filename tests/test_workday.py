@@ -114,6 +114,19 @@ class TestWorkdayEngine(unittest.TestCase):
         self.assertEqual(status_p6.worked_hours_str, "08h00m")
         self.assertTrue(status_p6.summary_alert)
 
+        # Punch 7: 18:30 (returning after 8h completed - on-call / overtime)
+        now_ot = self.tz.localize(datetime(2026, 9, 21, 18, 45))
+        status_p7 = self.engine.calculate(
+            "emp1",
+            ["08:00", "11:00", "12:00", "14:00", "15:00", "18:00", "18:30"],
+            current_dt=now_ot,
+        )
+        self.assertEqual(status_p7.stage, WorkdayStage.SECOND_HALF)
+        self.assertIsNone(status_p7.estimated_end_time)
+        self.assertEqual(status_p7.remaining_work_seconds, 0)
+        self.assertFalse(status_p7.end_work_advance_alert)
+        self.assertFalse(status_p7.end_work_final_alert)
+
 
 if __name__ == "__main__":
     unittest.main()

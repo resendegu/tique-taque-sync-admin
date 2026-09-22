@@ -188,8 +188,11 @@ class WorkdayEngine:
             remaining_work = max(0, self.target_seconds - total_worked)
 
             # Predicted finish time to complete target_hours (8h)
-            est_end_dt = active_start + timedelta(seconds=max(0, self.target_seconds - completed_worked))
-            est_end_str = est_end_dt.strftime("%H:%M")
+            if completed_worked < self.target_seconds:
+                est_end_dt = active_start + timedelta(seconds=self.target_seconds - completed_worked)
+                est_end_str = est_end_dt.strftime("%H:%M")
+            else:
+                est_end_str = None
 
             end_work_advance = (remaining_work <= end_work_advance_sec and remaining_work > self.end_work_final_sec)
             end_work_final = (remaining_work <= self.end_work_final_sec and remaining_work > 0)
