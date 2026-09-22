@@ -1,0 +1,188 @@
+name: Docker
+
+# Publica a imagem multi-arquitetura no GitHub Packages (GHCR):
+#   ghcr.io/resendegu/tique-taque-sync-admin
+#
+# Este é o artefato principal do projeto: o deploy alvo é Kubernetes ou uma VM
+# com Docker, então a imagem é construída, TESTADA de verdade e só então
+# publicada.
+#
+# Tags geradas:
+#   latest          -> último commit da branch main
+#   main            -> mesma coisa, por nome de branch
+#   1.2.3 / 1.2 / 1 -> quando uma tag v1.2.3 é criada
+#   sha-<commit>    -> rastreabilidade de cada build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, teste e push (amd64 + arm64)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU é necessário para montar a camada arm64 (Raspberry Pi, Apple
+      # Silicon, nós Ampere/Graviton) a partir de um runner amd64.
+      - name: Configurar QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Configurar Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Calcular tags e labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=TiqueTaque Sync Admin
+            org.opencontainers.image.description=Notificações corporativas de jornada via Slack, integradas à API Admin do TiqueTaque
+            org.opencontainers.image.licenses=MIT
+
+      # Build só de amd64, carregado no daemon local, para conseguir RODAR a
+      # imagem antes de publicá-la. O build multi-arch abaixo reaproveita o cache.
+      - name: Build de teste (amd64, carregado localmente)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: tique-taque-sync-admin:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Testar a imagem
+        run: |
+          set -euo pipefail
+
+          # Sem token real: o app deve subir mesmo assim e responder aos probes,
+          # porque é isso que o Kubernetes vai exigir antes de marcar o pod Ready.
+          docker run -d --name ttq-admin-ci \
+            -p 8000:8000 \
+            -e TIQUETAQUE_ADMIN_TOKEN=token-de-teste-do-ci \
+            -e SLACK_ENABLED=false \
+            -e ADMIN_SECRET_KEY=chave-de-teste-do-ci \
+            tique-taque-sync-admin:ci
+
+          echo "Aguardando o healthcheck do container..."
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' ttq-admin-ci 2>/dev/null || echo unknown)
+            if [ "$status" = "healthy" ]; then break; fi
+            if [ "$(docker inspect --format='{{.State.Running}}' ttq-admin-ci)" != "true" ]; then
+              echo "::error::O container morreu durante a inicialização"
+              docker logs ttq-admin-ci
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ "$status" != "healthy" ]; then
+            echo "::error::HEALTHCHECK do container não ficou saudável (último estado: $status)"
+            docker logs ttq-admin-ci
+            exit 1
+          fi
+
+          echo "--- /healthz ---"
+          curl -fsS http://127.0.0.1:8000/healthz | tee /tmp/healthz.json
+          grep -q '"status":"ok"' /tmp/healthz.json
+
+          echo "--- painel administrativo ---"
+          curl -fsS http://127.0.0.1:8000/ | grep -q "TiqueTaque Sync Admin"
+
+          echo "--- estáticos ---"
+          curl -fsS -o /dev/null http://127.0.0.1:8000/static/css/admin.css
+
+          # /api/admin/* precisa continuar fechado: o painel é interno e o único
+          # endpoint pensado para a internet é o webhook do Slack.
+          echo "--- proteção dos endpoints administrativos ---"
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/admin/metrics)
+          if [ "$code" != "403" ]; then
+            echo "::error::/api/admin/metrics respondeu $code, esperado 403 sem credencial"
+            docker logs ttq-admin-ci
+            exit 1
+          fi
+
+          echo "Imagem validada: sobe, fica healthy, serve o painel e protege a API admin."
+
+      - name: Encerrar o container de teste
+        if: always()
+        run: docker rm -f ttq-admin-ci 2>/dev/null || true
+
+      - name: Autenticar no GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build multi-arch e push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      # Permite que quem baixa a imagem verifique que ela saiu deste repositório:
+      #   gh attestation verify oci://ghcr.io/resendegu/tique-taque-sync-admin:latest \
+      #     --repo resendegu/tique-taque-sync-admin
+      - name: Gerar atestado de proveniência
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Resumo do build
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Imagem publicada :whale:"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

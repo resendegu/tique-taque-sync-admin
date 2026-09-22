@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tique-taque-sync-admin
+
+resources:
+  - 01-namespace.yaml
+  - 02-configmap.yaml
+  # Copie 03-secret.example.yaml para 03-secret.yaml e preencha as credenciais
+  # antes do primeiro `kubectl apply -k k8s/` (o arquivo real não é versionado).
+  - 03-secret.yaml
+  - 04-pvc.yaml
+  - 05-deployment.yaml
+  - 06-service.yaml
+  - 07-ingress.yaml

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tique-taque-sync-admin-pvc
+  namespace: tique-taque-sync-admin
+  labels:
+    app.kubernetes.io/name: tique-taque-sync-admin
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Iniciamos com o mínimo de 1Gi, mais que suficiente para milhares de colaboradores.
+      # Caso necessário no futuro, o disco pode ser expandido facilmente no cluster.
+      storage: 1Gi

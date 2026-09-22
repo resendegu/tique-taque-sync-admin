@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TiqueTaque Sync Admin — Gestão de Notificações de Ponto</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <meta name="admin-token" content="{{ admin_token }}">
+  <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+
+  <div class="container">
+    <!-- Navbar -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="brand-icon">⏱️</div>
+        <div>
+          <div class="brand-title">TiqueTaque Sync Admin</div>
+          <div style="font-size: 0.75rem; color: var(--text-secondary);">Enterprise Employee Notifications Engine</div>
+        </div>
+        <span class="brand-badge">Slack Bot Edition</span>
+      </div>
+      <div class="nav-actions">
+        <button id="btn-slack-tutorial" class="btn btn-secondary" title="Ver passo a passo para configurar o bot no Slack">
+          📖 Tutorial Slack Bot
+        </button>
+        <button id="btn-sync" class="btn btn-primary">
+          🔄 Sincronizar Agora
+        </button>
+        <button id="btn-export-backup" class="btn btn-secondary" title="Exportar preferências e status para JSON">
+          ⬇️ Exportar Backup
+        </button>
+        <label for="backup-file-input" class="btn btn-secondary" style="margin: 0; cursor: pointer;" title="Restaurar backup JSON">
+          ⬆️ Restaurar Backup
+        </label>
+        <input type="file" id="backup-file-input" accept=".json" style="display: none;">
+      </div>
+    </header>
+
+    <!-- Metrics Cards -->
+    <section class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-icon" style="color: #818cf8;">👥</div>
+        <div>
+          <div id="metric-total-emp" class="metric-value">0</div>
+          <div class="metric-label">Colaboradores Cadastrados</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="color: #34d399;">🔔</div>
+        <div>
+          <div id="metric-active-notifications" class="metric-value">0</div>
+          <div class="metric-label">Notificações Ativas</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="color: #fbbf24;">⏱️</div>
+        <div>
+          <div id="metric-synced-today" class="metric-value">0</div>
+          <div class="metric-label">Com Registro Hoje</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="color: #60a5fa;">💬</div>
+        <div>
+          <div id="metric-slack-status" class="metric-value">...</div>
+          <div class="metric-label">Status Slack Bot ("TiqueTaque Ponto")</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Company Policy & Governance -->
+    <section class="policy-card">
+      <div class="policy-header">
+        <div>
+          <h2 style="font-size: 1.125rem; font-weight: 700;">🏢 Diretrizes & Governança da Empresa</h2>
+          <p style="font-size: 0.8125rem; color: var(--text-secondary);">Defina se os colaboradores podem personalizar alertas e configure a antecedência padrão da equipe.</p>
+        </div>
+        <button type="submit" form="policy-form" class="btn btn-primary" style="padding: 6px 14px; font-size: 0.8125rem;">
+          💾 Salvar Diretrizes
+        </button>
+      </div>
+      <form id="policy-form">
+        <div class="policy-grid" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
+          <div class="form-group" style="justify-content: center;">
+            <label class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
+              <span>Permitir personalização pelo funcionário?</span>
+              <label class="switch">
+                <input type="checkbox" id="policy-allow-custom" checked>
+                <span class="slider"></span>
+              </label>
+            </label>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Se desmarcado, os botões de ajuste de minutos não aparecem nas mensagens do Slack e o padrão da empresa é imposto.</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Antecedência Padrão da Empresa (minutos)</label>
+            <input type="number" id="policy-default-lead-time" class="form-input" min="1" max="60" value="10" required>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Tempo padrão antes do almoço, fim do expediente e limite de 6h da CLT.</span>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <!-- Employees Table -->
+    <section class="table-card">
+      <div class="table-toolbar">
+        <div>
+          <h2 style="font-size: 1.125rem; font-weight: 700;">📋 Base de Colaboradores & Controle Individual</h2>
+          <p style="font-size: 0.8125rem; color: var(--text-secondary);">Ative ou desative notificações por colaborador (ex: estagiários, diretores ou dispensados de registro).</p>
+        </div>
+        <div>
+          <input type="text" id="search-input" class="search-input" placeholder="🔍 Buscar por nome ou e-mail...">
+        </div>
+      </div>
+
+      <div style="overflow-x: auto;">
+        <table class="custom-table">
+          <thead>
+            <tr>
+              <th>Colaborador</th>
+              <th>Notificações Ativas</th>
+              <th>Batidas Hoje</th>
+              <th>Estágio Atual</th>
+              <th>Horas Hoje</th>
+              <th>Antecedência</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="employees-tbody">
+            <tr>
+              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 32px;">Carregando colaboradores...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- Modal Tutorial Slack Bot -->
+  <div id="slack-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 1.5rem;">🤖</span>
+          <h3 style="font-size: 1.125rem; font-weight: 700;">Como Configurar o Bot no Slack ("TiqueTaque Ponto")</h3>
+        </div>
+        <button id="modal-close-btn" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 0.875rem;">
+          Siga os passos abaixo para criar o aplicativo no Slack em 1 minuto usando o <strong>Manifesto Oficial</strong>:
+        </p>
+
+        <ol style="color: var(--text-primary); font-size: 0.875rem; padding-left: 20px; line-height: 1.8; margin-bottom: 20px;">
+          <li>Acesse <a href="https://api.slack.com/apps" target="_blank" style="color: #818cf8; text-decoration: underline;">api.slack.com/apps</a> e clique em <strong>Create New App</strong>.</li>
+          <li>Escolha a opção <strong>"From an app manifest"</strong> e selecione o workspace da sua empresa.</li>
+          <li>Na aba <strong>JSON</strong>, cole o manifesto oficial abaixo e clique em <strong>Next &gt; Create</strong>:</li>
+        </ol>
+
+        <div style="position: relative; margin-bottom: 20px;">
+          <pre id="manifest-code" style="background: rgba(0,0,0,0.5); padding: 14px; border-radius: 8px; border: 1px solid var(--card-border); font-family: monospace; font-size: 0.8rem; overflow-x: auto; color: #a5b4fc; max-height: 220px;"></pre>
+          <button id="btn-copy-manifest" class="btn btn-primary" style="position: absolute; top: 10px; right: 10px; padding: 4px 10px; font-size: 0.75rem;">
+            📋 Copiar JSON
+          </button>
+        </div>
+
+        <ol start="4" style="color: var(--text-primary); font-size: 0.875rem; padding-left: 20px; line-height: 1.8;">
+          <li>No menu lateral, clique em <strong>Install App</strong> e depois em <strong>Install to Workspace</strong> para autorizar.</li>
+          <li>Copie o <strong>Bot User OAuth Token</strong> (começa com <code>xoxb-...</code>) e o <strong>Signing Secret</strong> para as variáveis de ambiente do seu servidor (<code>SLACK_BOT_TOKEN</code> e <code>SLACK_SIGNING_SECRET</code>).</li>
+        </ol>
+      </div>
+      <div class="modal-footer" style="padding: 16px 24px; display: flex; justify-content: flex-end; border-top: 1px solid var(--card-border);">
+        <button id="modal-ok-btn" class="btn btn-secondary">Entendido</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>

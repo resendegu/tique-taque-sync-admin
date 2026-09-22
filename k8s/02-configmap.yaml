@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tique-taque-sync-admin-config
+  namespace: tique-taque-sync-admin
+  labels:
+    app.kubernetes.io/name: tique-taque-sync-admin
+data:
+  TIQUETAQUE_API_BASE_URL: "https://api.tiquetaque.com/v2.1"
+  POLL_INTERVAL_SECONDS: "180"
+  ALERT_TICKER_INTERVAL_SECONDS: "15"
+  TIMEZONE: "America/Sao_Paulo"
+  DEFAULT_WORK_HOURS_PER_DAY: "8.0"
+  DEFAULT_LUNCH_DURATION_MINUTES: "60"
+  DEFAULT_WARNING_ADVANCE_MINUTES: "10"
+  DEFAULT_LUNCH_WARNING_ADVANCE_MINUTES: "10"
+  DEFAULT_LUNCH_WARNING_FINAL_MINUTES: "1"
+  DEFAULT_END_WORK_WARNING_ADVANCE_MINUTES: "15"
+  DEFAULT_END_WORK_WARNING_FINAL_MINUTES: "1"
+  DEFAULT_CONTINUOUS_WORK_LIMIT_HOURS: "6.0"
+  DEFAULT_CONTINUOUS_WORK_WARNING_ADVANCE_MINUTES: "10"
+  DEFAULT_CONTINUOUS_WORK_WARNING_FINAL_MINUTES: "1"
+  ALLOW_EMPLOYEE_CUSTOMIZATION: "true"
+  SLACK_ALLOWED_TEAM_ID: "" # Ex: T01V8LQHBE1 (opcional, para travar apenas seu workspace Slack)
+  DATA_DIR: "/app/data"
+  HOST: "0.0.0.0"
+  PORT: "8000"

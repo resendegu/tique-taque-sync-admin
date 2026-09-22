@@ -1,0 +1,25 @@
+# Caminho rápido: usa a imagem pública publicada pelo CI no GitHub Packages.
+#   docker compose up -d
+#
+# Para construir a partir deste código-fonte (contribuindo com o projeto),
+# descomente o bloco `build:` e rode `docker compose up -d --build`.
+
+services:
+  tique-taque-sync-admin:
+    image: ghcr.io/resendegu/tique-taque-sync-admin:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    container_name: tique-taque-sync-admin
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tique-taque-sync-admin
+  namespace: tique-taque-sync-admin
+  labels:
+    app.kubernetes.io/name: tique-taque-sync-admin
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tique-taque-sync-admin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tique-taque-sync-admin
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: tique-taque-sync-admin
+          # Imagem pública multi-arch (amd64 + arm64) publicada pelo CI deste repositório.
+          # Em produção, prefira fixar uma versão (ex: :1.0.0) em vez de :latest.
+          image: ghcr.io/resendegu/tique-taque-sync-admin:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: tique-taque-sync-admin-config
+            - secretRef:
+                name: tique-taque-sync-admin-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          volumeMounts:
+            - name: data-storage
+              mountPath: /app/data
+      volumes:
+        - name: data-storage
+          persistentVolumeClaim:
+            claimName: tique-taque-sync-admin-pvc
