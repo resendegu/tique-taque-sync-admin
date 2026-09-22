@@ -3,6 +3,13 @@
 > **Aviso para Agentes de IA (Claude, Antigravity, Copilot, Cursor, OpenAI, etc.):**  
 > Este documento é a **Fonte Única da Verdade (Single Source of Truth - SSOT)** sobre a arquitetura corporativa, integração com a API Pública de Admin do TiqueTaque (v2.1), o bot interativo do Slack ("TiqueTaque Ponto") e as regras de governança deste repositório (`tique-taque-sync-admin`). Leia atentamente antes de refatorar código ou sugerir alterações.
 
+> ### ⚠️ Antes de encerrar qualquer alteração de comportamento
+>
+> **Suba `[project].version` no `pyproject.toml`.** Aquela linha é o gatilho da release: se
+> ela não mudar, nenhuma versão é publicada e a correção não chega a quem faz `docker pull`.
+> MAJOR quebra compatibilidade, MINOR adiciona função compatível, PATCH corrige mantendo
+> compatibilidade — detalhes e casos de dúvida na seção 7.
+
 ---
 
 ## 🎯 1. Escopo & Filosofia do Projeto
@@ -118,7 +125,50 @@ O motor avalia as batidas de cada colaborador e dispara alertas nos seguintes mo
 
 ---
 
-## 📦 7. CI/CD e publicação da imagem
+## 🔖 7. Versionamento: a linha que dispara a release
+
+**Toda alteração de comportamento sobe a versão em `[project].version` do `pyproject.toml`.**
+Aquela linha é o gatilho da release: quando ela muda num push para a `main`, o CI cria a tag
+`vX.Y.Z`, publica a imagem com as tags `X.Y.Z`, `X.Y` e `X`, abre a release no GitHub e
+escreve as instruções de deploy. Se a linha não muda, o commit só atualiza `latest` e
+`sha-<commit>` — nenhuma versão é publicada.
+
+### Qual casa incrementar (SemVer)
+
+O critério é **compatibilidade**, não tamanho nem urgência da mudança:
+
+| Incremento | Quando | Exemplos neste projeto |
+|---|---|---|
+| **MAJOR** — `2.4.1` → `3.0.0` | Quebra compatibilidade: quem atualizar precisa mudar algo | Renomear/remover variável de ambiente, mudar formato do `config.json`, remover rota da API, exigir migração de banco |
+| **MINOR** — `2.4.1` → `2.5.0` | Funcionalidade nova, compatível com quem já usa | Novo canal de notificação, nova rota `/api/admin/*`, novo botão no Slack, nova variável de ambiente **opcional** |
+| **PATCH** — `2.4.1` → `2.4.2` | Correção compatível | Bug no cálculo da jornada, alerta disparando na hora errada, correção de segurança que não muda a interface, ajuste de layout |
+
+Ao subir MAJOR ou MINOR, zere as casas à direita: depois de `2.4.7`, um MINOR vira `2.5.0`
+(não `2.5.7`), e um MAJOR vira `3.0.0`.
+
+Dois detalhes que costumam gerar dúvida:
+
+1. **Correção de segurança não é automaticamente MAJOR nem MINOR.** Se ela não quebra nada e
+   não adiciona função, é PATCH — por mais grave que seja. O que muda a casa é a
+   compatibilidade, não a gravidade. (Comunique a gravidade no texto da release, não no
+   número.)
+2. **MINOR é para funcionalidade nova, não para "correção maior".** Um bug difícil, que levou
+   três dias e mexeu em meio motor, continua sendo PATCH se a interface não mudou.
+
+Pré-lançamentos usam `X.Y.Z-rc.N` (ex: `2.5.0-rc.1`): a release sai marcada como
+*pre-release* e as tags móveis `X.Y` e `X` **não** são movidas para ela.
+
+### Checklist ao fechar uma alteração
+
+1. O comportamento mudou para quem usa? Então suba a versão no `pyproject.toml`.
+2. Escolha a casa pela tabela acima.
+3. Commit e push na `main` — o resto é automático.
+4. Não crie a tag à mão: o CI cria `vX.Y.Z` a partir da versão. Tag manual é caminho de
+   exceção (e é tratada pelo job `release-notes`).
+
+---
+
+## 📦 8. CI/CD e publicação da imagem
 
 O artefato deste projeto é **a imagem de container**, não um pacote instalável: o alvo é
 Kubernetes ou uma VM com Docker.
@@ -154,13 +204,18 @@ Regras:
    instrução que falha com `manifest unknown`.
 8. **O filtro de tags aceita `v1.2.3` e `1.2.3`.** Um filtro só com `v*` faz tags sem prefixo
    passarem batido e a imagem nunca ganhar versão — só `latest` e `sha-*`.
-9. **As notas da release saem do `docker.yml`, não de um poller.** Sondar o registry até a
+9. **Uma tag empurrada com o `GITHUB_TOKEN` não dispara outros workflows.** O GitHub
+   bloqueia isso para evitar recursão. Por isso build, tag, release e notas acontecem no
+   mesmo run do `docker.yml`, em vez de workflows encadeados por evento de tag. Se algum dia
+   precisar encadear de verdade, será preciso um PAT em segredo — não tente com o token
+   padrão, porque falha em silêncio.
+10. **As notas da release saem do `docker.yml`, não de um poller.** Sondar o registry até a
    imagem aparecer é lento e cego (não distingue "ainda não publicou" de "tag errada"). O
    digest e a tag vêm dos outputs do job de build.
 
 ---
 
-## 🔒 8. Guardrails para Agentes de IA
+## 🔒 9. Guardrails para Agentes de IA
 
 1. **Volume Mínimo & Eficiência**: Começar sempre com volume leve (1Gi) no `04-pvc.yaml`. O SQLite WAL de metadados administrativos não armazena arquivos pesados, apenas configurações e logs.
 2. **Preservação de Escolhas dos Colaboradores no Poller**: Ao re-sincronizar a lista de funcionários da API do TiqueTaque, **nunca sobrescreva** os campos `notifications_enabled`, `lunch_warning_advance_minutes` ou `slack_user_id` já customizados no banco.

@@ -356,15 +356,34 @@ O teste da imagem no `docker.yml` não é simbólico: ele sobe o container, espe
 estáticos são servidos e que **`/api/admin/metrics` responde 403 sem credencial** — ou seja,
 uma imagem que exponha o painel administrativo por engano não chega a ser publicada.
 
-Para publicar uma versão:
+### Como publicar uma versão
 
-```bash
-git tag v1.2.3
-git push origin v1.2.3
+Não crie a tag à mão: **suba a versão em `[project].version` do `pyproject.toml`** e faça
+push para a `main`.
+
+```toml
+[project]
+name = "tique-taque-sync-admin"
+version = "1.1.0"   # <- alterar esta linha é o que publica uma release
 ```
 
-Isso gera as tags `1.2.3`, `1.2` e `1` no GHCR — note que o `v` **cai**: a tag do git
-`v1.2.3` vira a imagem `ghcr.io/resendegu/tique-taque-sync-admin:1.2.3`. As notas da release
+O CI cuida do resto: cria a tag `v1.1.0`, publica a imagem com as tags `1.1.0`, `1.1` e `1`,
+abre a release e escreve as instruções de deploy nela. Commits que não mexem nessa linha
+atualizam apenas `latest` e `sha-<commit>`.
+
+Qual casa incrementar (regra do [SemVer](https://semver.org/lang/pt-BR/) — o critério é
+compatibilidade, não o tamanho da mudança):
+
+| Incremento | Quando |
+|---|---|
+| **MAJOR** `1.1.0` → `2.0.0` | Quebra compatibilidade (remover variável de ambiente, mudar formato de config, remover rota) |
+| **MINOR** `1.1.0` → `1.2.0` | Funcionalidade nova compatível (novo alerta, nova rota, variável opcional) |
+| **PATCH** `1.1.0` → `1.1.1` | Correção compatível — inclusive correção de segurança que não muda a interface |
+
+Pré-lançamento: `1.2.0-rc.1` sai marcado como *pre-release* e não move as tags `1.2` e `1`.
+
+Note que o `v` **cai** na imagem: a tag do git `v1.2.3` vira
+`ghcr.io/resendegu/tique-taque-sync-admin:1.2.3`. As notas da release
 são escritas pelo próprio `docker.yml`, logo após o push da imagem, então elas citam a tag e o
 digest que acabaram de ser publicados — sem adivinhação.
 

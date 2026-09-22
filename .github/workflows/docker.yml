@@ -36,8 +36,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A versão do projeto mora em [project].version do pyproject.toml. Alterar
+  # aquela linha é o que declara uma release: este job compara com o commit
+  # anterior e o restante do workflow age a partir daí.
+  version:
+    name: Versão do pyproject
+    runs-on: ubuntu-latest
+    outputs:
+      # `|| 'false'` cobre os casos em que o passo nem roda (PR, push de tag).
+      changed: ${{ steps.detect.outputs.changed || 'false' }}
+      version: ${{ steps.detect.outputs.version }}
+      major_minor: ${{ steps.detect.outputs.major_minor }}
+      major: ${{ steps.detect.outputs.major }}
+      prerelease: ${{ steps.detect.outputs.prerelease || 'false' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # o commit atual e o anterior, para comparar a versão
+
+      - name: Detectar alteração de versão
+        id: detect
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          if git show HEAD^:pyproject.toml > /tmp/previous.toml 2>/dev/null; then
+            python scripts/version_bump.py --current pyproject.toml --previous /tmp/previous.toml
+          else
+            # Primeiro commit do repositório: não há com o que comparar.
+            python scripts/version_bump.py --current pyproject.toml
+          fi
+
   build:
     name: Build, teste e push (amd64 + arm64)
+    needs: version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -61,6 +93,12 @@ jobs:
       - name: Configurar Buildx
         uses: docker/setup-buildx-action@v3
 
+      # As três últimas linhas de `tags` vêm do pyproject.toml e só ficam ativas
+      # quando a versão mudou neste commit. As tags móveis `1.2` e `1` ficam de
+      # fora em pré-lançamentos, para não apontarem um `rc` como versão estável.
+      #
+      # Sem comentários dentro do bloco `tags:` de propósito: ali dentro o `#`
+      # faz parte da string passada à action, não é comentário do YAML.
       - name: Calcular tags e labels
         id: meta
         uses: docker/metadata-action@v5
@@ -73,6 +111,9 @@ jobs:
             type=semver,pattern={{major}}
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.version.outputs.version }},enable=${{ needs.version.outputs.changed == 'true' }}
+            type=raw,value=${{ needs.version.outputs.major_minor }},enable=${{ needs.version.outputs.changed == 'true' && needs.version.outputs.prerelease != 'true' }}
+            type=raw,value=${{ needs.version.outputs.major }},enable=${{ needs.version.outputs.changed == 'true' && needs.version.outputs.prerelease != 'true' }}
           labels: |
             org.opencontainers.image.title=TiqueTaque Sync Admin
             org.opencontainers.image.description=Notificações corporativas de jornada via Slack, integradas à API Admin do TiqueTaque
@@ -194,11 +235,79 @@ jobs:
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # As notas da release são escritas AQUI, logo depois do push da imagem, e não
-  # num workflow separado que ficaria adivinhando quando a imagem apareceu: o
-  # digest e a tag real da imagem vêm direto dos outputs do build.
+  # Caminho principal: a versão do pyproject.toml mudou neste push para a main.
+  # A tag do git, a release e as notas são criadas AQUI, no mesmo run que acabou
+  # de publicar a imagem — e não por workflows encadeados.
+  #
+  # Isso não é só elegância: uma tag empurrada com o GITHUB_TOKEN **não dispara**
+  # outros workflows (o GitHub bloqueia para evitar recursão). Um `docker.yml`
+  # que dependesse do evento de push da tag simplesmente nunca rodaria.
+  release:
+    name: Tag e release da versão
+    needs: [version, build]
+    if: >-
+      needs.version.outputs.changed == 'true' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # histórico completo para o --generate-notes
+
+      - name: Criar a tag do git
+        id: tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "::notice::A tag ${tag} já existe — nada a criar."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Release ${VERSION}"
+            git push origin "$tag"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Criar a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::A release ${TAG} já existe — as notas serão atualizadas."
+            exit 0
+          fi
+
+          flags=(--title "$TAG" --generate-notes)
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "$TAG" "${flags[@]}"
+
+      - name: Escrever as instruções de deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+          IMAGE_TAG: ${{ needs.version.outputs.version }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          PLATFORMS: "linux/amd64, linux/arm64"
+        run: bash scripts/release-notes.sh
+
+  # Caminho alternativo: alguém empurrou uma tag à mão, sem passar pelo bump do
+  # pyproject.toml. A imagem já foi publicada pelo job `build`; aqui só as notas.
   release-notes:
-    name: Notas da release
+    name: Notas da release (tag manual)
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
