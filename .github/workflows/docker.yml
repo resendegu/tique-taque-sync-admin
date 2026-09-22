@@ -16,7 +16,9 @@ name: Docker
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
+    # Aceita tanto `v1.2.3` quanto `1.2.3` — as duas convenções aparecem na
+    # prática, e uma tag fora do filtro publicaria a versão sem querer.
+    tags: ["v[0-9]*", "[0-9]*"]
     paths-ignore:
       - "**.md"
   pull_request:
@@ -42,6 +44,11 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      # Tag da IMAGEM, que não é a tag do git: a metadata-action remove o "v"
+      # de `v1.2.3` e publica `1.2.3`.
+      version: ${{ steps.meta.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -186,3 +193,27 @@ jobs:
             echo
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # As notas da release são escritas AQUI, logo depois do push da imagem, e não
+  # num workflow separado que ficaria adivinhando quando a imagem apareceu: o
+  # digest e a tag real da imagem vêm direto dos outputs do build.
+  release-notes:
+    name: Notas da release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Escrever as instruções de deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          IMAGE_TAG: ${{ needs.build.outputs.version }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          PLATFORMS: "linux/amd64, linux/arm64"
+        run: bash scripts/release-notes.sh

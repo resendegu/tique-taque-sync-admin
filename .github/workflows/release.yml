@@ -1,11 +1,12 @@
 name: Release
 
-# Ao publicar uma release, escreve no corpo dela as instruções de deploy
-# (Docker e Kubernetes) já com a tag preenchida, o digest da imagem publicada
-# e a mensagem do último commit.
+# Caminho normal: a tag é empurrada, o workflow Docker builda, publica a imagem
+# e — no job `release-notes` dele — escreve as instruções de deploy na release.
 #
-# Não há binário para anexar: o artefato deste projeto é a imagem no GHCR,
-# construída pelo workflow Docker.
+# Este workflow cobre o outro caso: a release é publicada DEPOIS que a imagem já
+# existe (ou é publicada na interface do GitHub, disparando o evento `release`).
+# Em vez de ficar sondando o registry, ele espera o run do Docker daquele commit
+# usando `gh run watch` e só então escreve as notas.
 
 on:
   release:
@@ -24,123 +25,75 @@ jobs:
     name: Instruções de deploy na release
     runs-on: ubuntu-latest
     permissions:
-      contents: write # necessário para editar o corpo da release
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
+      # Se a tag acabou de ser criada, o workflow Docker está rodando agora. Em
+      # vez de adivinhar quanto tempo ele leva, esperamos o run daquele commit.
+      - name: Esperar o build da imagem
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+
+          run_id=$(gh run list \
+            --workflow=docker.yml \
+            --commit "$sha" \
+            --limit 1 \
+            --json databaseId,status,conclusion \
+            --jq '.[0].databaseId // empty')
+
+          if [ -z "$run_id" ]; then
+            echo "Nenhum run do Docker para ${sha:0:7} — a imagem já deve estar publicada."
+            exit 0
+          fi
+
+          echo "Acompanhando o run ${run_id} do workflow Docker..."
+          # --exit-status faz o passo falhar se o build falhou: não faz sentido
+          # anunciar instruções de deploy de uma imagem que não subiu.
+          gh run watch "$run_id" --exit-status --interval 15
+
+      - name: Descobrir a tag e o digest da imagem
+        id: image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          # A metadata-action publica `1.2.3` para a tag `v1.2.3`: o "v" cai.
+          image_tag="${TAG#v}"
+          image="ghcr.io/${{ github.repository }}"
+
+          # O pacote pode ser privado; autenticar antes de inspecionar.
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          digest=""
+          platforms=""
+          if inspect=$(docker buildx imagetools inspect "${image}:${image_tag}" 2>/dev/null); then
+            digest=$(printf '%s\n' "$inspect" | awk '/^Digest:/ {print $2; exit}')
+            platforms=$(printf '%s\n' "$inspect" | awk '/Platform:/ {print $2}' | sort -u | paste -sd ',' - | sed 's/,/, /g')
+            echo "Imagem encontrada: ${image}:${image_tag} (${digest})"
+          else
+            echo "::warning::Não foi possível inspecionar ${image}:${image_tag} — as notas sairão sem o digest."
+          fi
+
+          {
+            echo "tag=${image_tag}"
+            echo "digest=${digest}"
+            echo "platforms=${platforms}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Escrever as instruções de deploy
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          IMAGE="ghcr.io/${REPO}"
-          MARKER="<!-- gerado automaticamente pelo workflow Release -->"
-
-          # O workflow Docker roda em paralelo com este (a tag dispara os dois) e
-          # o build multi-arch com QEMU é lento. Esperamos um pouco pela imagem
-          # para poder citar o digest; se não vier, seguimos sem ele.
-          DIGEST=""
-          PLATFORMS=""
-          for attempt in $(seq 1 30); do
-            if inspect=$(docker buildx imagetools inspect "${IMAGE}:${TAG}" 2>/dev/null); then
-              DIGEST=$(printf '%s\n' "$inspect" | awk '/^Digest:/ {print $2; exit}')
-              PLATFORMS=$(printf '%s\n' "$inspect" | awk '/Platform:/ {print $2}' | sort -u | paste -sd ',' - | sed 's/,/, /g')
-              echo "Imagem encontrada: ${IMAGE}:${TAG} (${DIGEST})"
-              break
-            fi
-            echo "Imagem ainda não publicada, tentativa ${attempt}/30..."
-            sleep 20
-          done
-
-          # Placeholders em vez de expansão dentro do heredoc: assim o Markdown
-          # pode conter crases e cifrões sem o shell tentar interpretá-los.
-          cat > generated.md <<'TEMPLATE'
-          __MARKER__
-
-          ## 🐳 Subir com Docker
-
-          ```bash
-          docker run -d --name tique-taque-sync-admin --restart unless-stopped \
-            -p 8000:8000 \
-            -e TIQUETAQUE_ADMIN_TOKEN="seu-token-da-api-publica" \
-            -e SLACK_ENABLED=true \
-            -e SLACK_BOT_TOKEN="xoxb-..." \
-            -e SLACK_SIGNING_SECRET="..." \
-            -e ADMIN_SECRET_KEY="$(openssl rand -hex 32)" \
-            -v tiquetaque-admin-data:/app/data \
-            __IMAGE__:__TAG__
-          ```
-
-          Painel administrativo em `http://localhost:8000`.
-
-          Com Docker Compose, baixe o `docker-compose.yml` e o `.env.example` desta tag:
-
-          ```bash
-          curl -O https://raw.githubusercontent.com/__REPO__/__TAG__/docker-compose.yml
-          curl -o .env https://raw.githubusercontent.com/__REPO__/__TAG__/.env.example
-          # edite o .env com seu token do TiqueTaque e as credenciais do Slack
-          docker compose up -d
-          ```
-
-          ## ☸️ Subir no Kubernetes
-
-          ```bash
-          git clone --branch __TAG__ https://github.com/__REPO__.git
-          cd tique-taque-sync-admin
-
-          cp k8s/03-secret.example.yaml k8s/03-secret.yaml
-          # preencha TIQUETAQUE_ADMIN_TOKEN, SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET e ADMIN_SECRET_KEY
-
-          kubectl apply -k k8s/
-          kubectl -n tique-taque-sync-admin rollout status deploy/tique-taque-sync-admin
-          ```
-
-          Os manifests desta tag já apontam para `__IMAGE__:__TAG__`.
-
-          > ⚠️ O painel `/` e as rotas `/api/admin/*` são internos. Se expuser pelo Ingress,
-          > proteja-os (Cloudflare Access, oauth2-proxy, VPN). O único endpoint que precisa
-          > ficar acessível ao mundo é `/api/slack/interactions`, e ele valida a assinatura
-          > do Slack. Veja o Dual Ingress no README.
-
-          ## 📦 Imagem
-
-          | | |
-          |---|---|
-          | Imagem | `__IMAGE__:__TAG__` |
-          | Plataformas | __PLATFORMS__ |
-          | Digest | `__DIGEST__` |
-
-          Verificar a procedência:
-
-          ```bash
-          gh attestation verify oci://__IMAGE__:__TAG__ --repo __REPO__
-          ```
-          TEMPLATE
-
-          sed -i "s|__MARKER__|${MARKER}|g; s|__IMAGE__|${IMAGE}|g; s|__TAG__|${TAG}|g; s|__REPO__|${REPO}|g" generated.md
-          sed -i "s|__PLATFORMS__|${PLATFORMS:-linux/amd64, linux/arm64}|g" generated.md
-          sed -i "s|__DIGEST__|${DIGEST:-publicado pelo workflow Docker}|g" generated.md
-
-          {
-            printf '\n## 📝 Último commit (%s)\n\n' "$(git rev-parse --short HEAD)"
-            printf '```text\n'
-            # A substituição de comando já descarta as quebras de linha do fim.
-            printf '%s\n' "$(git log -1 --pretty=%B)"
-            printf '```\n'
-          } >> generated.md
-
-          # Preserva o que a pessoa escreveu à mão: o bloco gerado fica abaixo do
-          # marcador e é substituído, não duplicado, se o workflow rodar de novo.
-          gh release view "$TAG" --json body --jq .body > existing.md || : > existing.md
-          if grep -qF "$MARKER" existing.md; then
-            sed -i "/$(printf '%s' "$MARKER" | sed 's/[][\.*^$/]/\\&/g')/,\$d" existing.md
-          fi
-
-          { cat existing.md; printf '\n'; cat generated.md; } > release-notes.md
-          gh release edit "$TAG" --notes-file release-notes.md
-          echo "Notas da release $TAG atualizadas."
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORMS: ${{ steps.image.outputs.platforms }}
+        run: bash scripts/release-notes.sh

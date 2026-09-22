@@ -348,8 +348,8 @@ Três workflows em [`.github/workflows/`](.github/workflows/):
 | Workflow | Dispara em | O que faz |
 | -------- | ---------- | --------- |
 | [`ci.yml`](.github/workflows/ci.yml) | push na `main`, PRs | Roda a suíte em Python 3.11/3.12/3.13; renderiza os manifests com `kubectl kustomize`; valida o `docker-compose.yml`; confere que o Deployment aponta para a imagem publicada e que nenhum valor com cara de credencial real ficou nos arquivos `.example` |
-| [`docker.yml`](.github/workflows/docker.yml) | push na `main`, tags `v*.*.*`, PRs | Builda, **sobe a imagem e a testa de verdade**, e então publica `linux/amd64` + `linux/arm64` em `ghcr.io/resendegu/tique-taque-sync-admin` com proveniência e SBOM (em PR, builda e testa sem publicar) |
-| [`release.yml`](.github/workflows/release.yml) | release publicada (ou manual) | Escreve nas notas da release as instruções de deploy (Docker e Kubernetes) já com a tag preenchida, o digest da imagem e a mensagem do último commit |
+| [`docker.yml`](.github/workflows/docker.yml) | push na `main`, tags de versão, PRs | Builda, **sobe a imagem e a testa de verdade**, publica `linux/amd64` + `linux/arm64` em `ghcr.io/resendegu/tique-taque-sync-admin` com proveniência e SBOM e, quando o push é de tag, escreve as instruções de deploy na release (em PR, builda e testa sem publicar) |
+| [`release.yml`](.github/workflows/release.yml) | release publicada (ou manual) | Cobre o caso da release publicada depois: espera o run do Docker daquele commit com `gh run watch` e então escreve as mesmas notas |
 
 O teste da imagem no `docker.yml` não é simbólico: ele sobe o container, espera o
 `HEALTHCHECK` ficar `healthy`, consulta `/healthz`, confere que o painel renderiza, que os
@@ -363,9 +363,16 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
-Isso gera as tags `1.2.3`, `1.2` e `1` no GHCR. Ao **publicar a release** dessa tag na
-interface do GitHub, o `release.yml` completa as notas com o passo a passo de deploy. O texto
-que você escrever à mão é preservado: o bloco gerado entra abaixo de um marcador e é
+Isso gera as tags `1.2.3`, `1.2` e `1` no GHCR — note que o `v` **cai**: a tag do git
+`v1.2.3` vira a imagem `ghcr.io/resendegu/tique-taque-sync-admin:1.2.3`. As notas da release
+são escritas pelo próprio `docker.yml`, logo após o push da imagem, então elas citam a tag e o
+digest que acabaram de ser publicados — sem adivinhação.
+
+Se a release for publicada só depois, o `release.yml` assume: ele espera o build daquele
+commit terminar (`gh run watch`) e escreve as mesmas notas. Os dois caminhos chamam o mesmo
+[`scripts/release-notes.sh`](scripts/release-notes.sh).
+
+O texto que você escrever à mão é preservado: o bloco gerado entra abaixo de um marcador e é
 substituído, não duplicado, se o workflow rodar de novo.
 
 > 📦 **Primeira publicação:** pacotes no GHCR nascem privados. Depois do primeiro build, abra

@@ -126,8 +126,8 @@ Kubernetes ou uma VM com Docker.
 | Workflow | Dispara | Responsabilidade |
 |---|---|---|
 | `ci.yml` | push `main`, PR | Testes em Python 3.11/3.12/3.13; `kubectl kustomize` dos manifests; `docker compose config`; checagem de que o Deployment aponta para a imagem publicada e de que não há credencial real nos `.example` |
-| `docker.yml` | push `main`, tag `v*.*.*`, PR | Build amd64 carregado localmente → **teste real do container** → build multi-arch (amd64 + arm64) e push para `ghcr.io/resendegu/tique-taque-sync-admin`, com proveniência e SBOM |
-| `release.yml` | `release: published`, manual | Escreve nas notas da release as instruções de Docker/Kubernetes com a tag preenchida, o digest da imagem e a mensagem do último commit |
+| `docker.yml` | push `main`, tag de versão, PR | Build amd64 carregado localmente → **teste real do container** → build multi-arch (amd64 + arm64) e push para `ghcr.io/resendegu/tique-taque-sync-admin`, com proveniência e SBOM. Em push de tag, o job `release-notes` (`needs: build`) escreve as notas da release |
+| `release.yml` | `release: published`, manual | Caso da release publicada depois do build: espera o run do Docker com `gh run watch` e chama o mesmo `scripts/release-notes.sh` |
 
 Regras:
 
@@ -147,6 +147,16 @@ Regras:
 6. **Nunca colocar credencial real em default de código ou em arquivo `.example`.** O
    `tiquetaque_admin_token` tem default vazio de propósito; o `ci.yml` falha se aparecer algo
    com formato de UUID ou de token `xoxb-` nesses arquivos.
+7. **Tag do git ≠ tag da imagem.** A `metadata-action` remove o `v`: a tag `v1.2.3` publica
+   `ghcr.io/…:1.2.3`. Qualquer texto que mande alguém dar `docker pull`/`docker run` precisa
+   usar a tag da IMAGEM (`needs.build.outputs.version`, ou `${TAG#v}`), enquanto `git clone
+   --branch` e URLs do `raw.githubusercontent.com` usam a tag do GIT. Misturar as duas gera
+   instrução que falha com `manifest unknown`.
+8. **O filtro de tags aceita `v1.2.3` e `1.2.3`.** Um filtro só com `v*` faz tags sem prefixo
+   passarem batido e a imagem nunca ganhar versão — só `latest` e `sha-*`.
+9. **As notas da release saem do `docker.yml`, não de um poller.** Sondar o registry até a
+   imagem aparecer é lento e cego (não distingue "ainda não publicou" de "tag errada"). O
+   digest e a tag vêm dos outputs do job de build.
 
 ---
 
