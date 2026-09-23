@@ -26,6 +26,7 @@ class AdminSyncScheduler:
         poll_interval_seconds: int = 180,
         alert_ticker_interval_seconds: int = 15,
         timezone_name: str = "America/Sao_Paulo",
+        stale_alert_minutes: int = 15,
     ):
         self.client = client
         self.engine = engine
@@ -41,6 +42,12 @@ class AdminSyncScheduler:
 
         # In-memory cache of latest punches per employee: {emp_id: ["08:00", "12:00"]}
         self._cached_punches: Dict[str, List[str]] = {}
+        # Data a que o cache acima se refere. Sem isso, passada a meia-noite as
+        # batidas de ontem eram reavaliadas com a data de hoje e o dia inteiro
+        # era anunciado outra vez.
+        self._cached_punches_date: str | None = None
+        # Alerta que aponta para mais de X minutos atrás é registrado, não enviado.
+        self.stale_alert_minutes = stale_alert_minutes
         # In-memory cache of latest workday status: {emp_id: EmployeeWorkdayStatus}
         self._cached_status: Dict[str, EmployeeWorkdayStatus] = {}
 
@@ -88,6 +95,7 @@ class AdminSyncScheduler:
                 # Fetch official punches from TiqueTaque Public Admin API
                 punches = await self.client.get_employee_times(emp_id, today_str)
                 self._cached_punches[emp_id] = punches
+                self._cached_punches_date = now.strftime("%d/%m/%Y")
 
                 lead = emp.get("lunch_warning_advance_minutes") or default_lead
                 status = self.engine.calculate(
@@ -132,6 +140,19 @@ class AdminSyncScheduler:
         """Check all employees in memory and trigger Slack notifications when conditions are met."""
         now = datetime.now(self.tz)
         today_date_str = now.strftime("%d/%m/%Y")
+
+        # Virada de dia: as batidas em memória são de ontem. Avaliá-las com a
+        # data de hoje faz cada uma parecer inédita — foi o que despejou a
+        # jornada inteira no Slack à 00:00. Espera o poller trazer o dia novo.
+        if self._cached_punches_date and self._cached_punches_date != today_date_str:
+            logger.info(
+                "Virada de dia (cache de %s): limpando até a próxima sincronização.",
+                self._cached_punches_date,
+            )
+            self._cached_punches = {}
+            self._cached_punches_date = None
+            return
+
         allow_customization = self.db.get_company_setting("allow_employee_customization", "true") == "true"
         default_lead = int(self.db.get_company_setting("default_lead_time", "10"))
         stored_employees = self.db.get_all_employees()
@@ -170,8 +191,19 @@ class AdminSyncScheduler:
                     except Exception:
                         p_dt = now
 
-                    # Avoid spamming old history on cold start / pod restart if older than 1 hour
-                    if (now - p_dt).total_seconds() > 3600:
+                    # Batida que já passou não vira aviso: só é registrada, para
+                    # não disparar depois. Cobre reinício de pod (o SQLite é
+                    # efêmero e a deduplicação some junto).
+                    #
+                    # O `abs` importa: com o cache de ontem, uma batida de
+                    # "07:58" virava 07:58 de HOJE — 8h no futuro às 00:00 — e a
+                    # diferença negativa passava direto pela verificação antiga.
+                    atraso = abs((now - p_dt).total_seconds())
+                    if atraso > self.stale_alert_minutes * 60:
+                        logger.info(
+                            "Silenciando %s de %s: refere-se a %d min de distância.",
+                            alert_key, emp_id, int(atraso // 60),
+                        )
                         self.db.record_dispatched_alert(emp_id, today_date_str, alert_key)
                         continue
 
@@ -466,7 +498,20 @@ class AdminSyncScheduler:
                 self.db.record_dispatched_alert(emp_id, today_date_str, "end_work_final")
 
             # 7. Summary Alert (When workday completed)
-            if status.summary_alert and not self.db.has_alert_been_sent(emp_id, today_date_str, "summary"):
+            # O resumo se refere à última batida: se ela já passou faz tempo,
+            # registra em silêncio (senão volta a cada reinício).
+            resumo_vencido = False
+            if punches:
+                try:
+                    ultima = punches[-1].split(":")
+                    ultima_dt = base_date.replace(hour=int(ultima[0]), minute=int(ultima[1]))
+                    resumo_vencido = abs((now - ultima_dt).total_seconds()) > self.stale_alert_minutes * 60
+                except Exception:
+                    resumo_vencido = False
+
+            if status.summary_alert and resumo_vencido and not self.db.has_alert_been_sent(emp_id, today_date_str, "summary"):
+                self.db.record_dispatched_alert(emp_id, today_date_str, "summary")
+            elif status.summary_alert and not self.db.has_alert_been_sent(emp_id, today_date_str, "summary"):
                 await self.bot.send_dm_to_employee(
                     employee_id=emp_id,
                     email=emp.get("email"),

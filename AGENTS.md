@@ -96,6 +96,37 @@ A API pública oficial de administração está documentada em `https://api-docs
 
 ---
 
+### Alertas vencidos nunca viram notificação
+
+Duas situações faziam o app despejar a jornada inteira de uma vez, ambas
+observadas em produção (22-23/09/2026):
+
+| Quando | O que acontecia |
+|---|---|
+| **Reinício** | A deduplicação (`dispatched_alerts`) vive no SQLite. Em contêiner com disco efêmero ela some, e todas as batidas do dia eram anunciadas de novo. |
+| **Meia-noite** | A chave de deduplicação inclui a data. À 00:00 tudo vira "inédito" — e as batidas em memória ainda são de ontem, reavaliadas com a data de hoje. |
+
+Duas proteções, que precisam continuar existindo:
+
+1. **Guarda de virada de dia.** O cache de batidas é carimbado com a data a que
+   pertence. Se o dia mudou, ele é descartado e nada é avaliado até o poller
+   trazer o dia corrente. Sem isso, as batidas de ontem parecem de hoje.
+2. **Guarda de alerta vencido.** Todo alerta carrega o instante a que se refere.
+   Se esse instante está a mais de `stale_alert_minutes` (padrão 15) de agora, o
+   alerta é **gravado como despachado mas não enviado** — some para sempre, sem
+   incomodar. Alertas de janela curta ("faltam 5 minutos") apontam para o agora e
+   passam normalmente.
+
+A comparação usa **valor absoluto**: com o cache de ontem, uma batida de "07:58"
+vira 07:58 de *hoje*, ou seja 8 horas no **futuro** à 00:00 — e uma diferença
+negativa passaria direto por uma verificação que só olha `> limite`.
+
+Silenciar não é ignorar: o alerta vencido é registrado, senão voltaria no próximo
+ciclo. Há testes em `tests/test_alert_storms.py` reproduzindo os dois cenários —
+eles falham se qualquer uma das proteções for removida.
+
+---
+
 ## ⚖️ 5. Regras CLT & Máquina de Estados da Jornada
 
 O motor avalia as batidas de cada colaborador e dispara alertas nos seguintes momentos:
