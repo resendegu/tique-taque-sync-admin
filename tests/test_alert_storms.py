@@ -106,6 +106,21 @@ class TestRajadasDeAlerta(unittest.TestCase):
                     "o alerta silenciado precisa ficar registrado",
                 )
 
+    def test_sync_company_completes_without_error(self):
+        """sync_company deve rodar sem NameError ou exceção de variáveis não declaradas."""
+        fake_client = mock.AsyncMock()
+        fake_client.get_employees.return_value = [
+            AdminEmployee(id=FUNCIONARIO, full_name="Fulano", email="f@e.com")
+        ]
+        fake_client.get_employee_times.return_value = ["08:00", "12:00"]
+        self.scheduler.client = fake_client
+
+        asyncio.run(self.scheduler.sync_company())
+
+        self.assertIn(FUNCIONARIO, self.scheduler._cached_punches)
+        self.assertIsNotNone(self.scheduler._cached_punches_date)
+        self.assertIn(FUNCIONARIO, self.scheduler._cached_status)
+
 
 if __name__ == "__main__":
     unittest.main()

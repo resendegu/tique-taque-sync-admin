@@ -86,7 +86,8 @@ class AdminSyncScheduler:
             # Upsert into database preserving existing employee toggles & preferences
             self.db.upsert_employees_from_api(employees)
 
-            today_str = datetime.now(self.tz).strftime("%Y-%m-%d")
+            now = datetime.now(self.tz)
+            today_str = now.strftime("%Y-%m-%d")
             stored_employees = self.db.get_all_employees()
 
             default_lead = int(self.db.get_company_setting("default_lead_time", "10"))
@@ -101,6 +102,7 @@ class AdminSyncScheduler:
                 status = self.engine.calculate(
                     employee_id=emp_id,
                     times=punches,
+                    current_dt=now,
                     lunch_advance_minutes=lead,
                     end_work_advance_minutes=lead,
                     clt_advance_minutes=lead,
